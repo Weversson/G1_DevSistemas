@@ -1,0 +1,14 @@
+# Configuracoes locais de assistentes de IA
+.agents/
+.codex/
+.claude/
+.cursor/
+.aider*
+.ai/
+
+# Rascunhos e fragmentos locais de IA
+ai-fragments/
+ai-drafts/
+prompt-drafts/
+*.ai-fragment.md
+*.prompt-draft.md

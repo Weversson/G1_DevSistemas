@@ -1,0 +1,32 @@
+sequenceDiagram
+    autonumber
+    actor FE as Usuário / navegador React
+    participant API as FastAPI
+    participant DB as SQLite
+
+    FE->>API: fetch GET /students, assíncrona<br/>api.ts:14-23,51-63
+    Note over API: list_students é síncrona<br/>students.py:52-76
+    alt sort ou order inválido
+        API-->>FE: HTTP 422<br/>students.py:63-66
+    else parâmetros válidos
+        API->DB: fetch_students, chamada síncrona<br/>students.py:67-76
+        Note over DB: Conexão aberta em database.py:24<br/>Sem BEGIN explícito
+        alt leituras concluídas
+            DB->DB: PRAGMA table_info<br/>database.py:160-164
+            DB->DB: SELECT COUNT(*)<br/>database.py:176-178
+            DB->DB: SELECT página<br/>database.py:179-185
+            DB-->API: items e total<br/>database.py:186
+            Note over DB: commit e close ao sair do contexto<br/>database.py:27-33
+            alt risco ausente ou inválido
+                API->>API: probabilidade null, risco Indisponível<br/>students.py:24-29
+            else risco válido
+                API->>API: arredonda probabilidade<br/>students.py:27-29
+            end
+            API-->>FE: HTTP 200 e JSON StudentList<br/>schemas.py:79-92
+            FE->>FE: Exibe linhas da tabela
+        else erro em uma leitura
+            Note over DB: rollback e close<br/>database.py:29-33
+            DB-->API: exceção propagada
+            API-->>FE: HTTP 500<br/>main.py:64-67
+        end
+    end
