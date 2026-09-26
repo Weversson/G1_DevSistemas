@@ -1,32 +1,58 @@
 sequenceDiagram
     autonumber
-    actor FE as Usuário / navegador React
-    participant API as FastAPI
+    actor FE as Navegador React
+    participant API as FastAPI / students.py
+    participant P as Persistência / database.py
     participant DB as SQLite
 
-    FE->>API: fetch GET /students, assíncrona<br/>api.ts:14-23,51-63
-    Note over API: list_students é síncrona<br/>students.py:52-76
-    alt sort ou order inválido
-        API-->>FE: HTTP 422<br/>students.py:63-66
+    Note over FE,DB: Snapshot 342f9fe<br/>Legenda: ponta aberta = chamada assíncrona, ponta fechada = síncrona<br/>Linha tracejada = retorno
+    Note over FE,DB: Caminhos: api.ts em frontend/src/lib/<br/>students.py em backend/app/routers/<br/>database.py, schemas.py, main.py e auth.py em backend/app/
+    Note over API: Pré-condição: autenticação aprovada ou desativada<br/>main.py:49, auth.py:7-35
+
+    FE-)API: GET /students via fetch<br/>api.ts:14-23,51-63
+    alt sort, order ou paginação inválidos
+        API-->>FE: HTTP 422<br/>students.py:58-66
+        Note over FE: request rejeita a Promise com Error<br/>api.ts:19-21
     else parâmetros válidos
-        API->DB: fetch_students, chamada síncrona<br/>students.py:67-76
-        Note over DB: Conexão aberta em database.py:24<br/>Sem BEGIN explícito
-        alt leituras concluídas
-            DB->DB: PRAGMA table_info<br/>database.py:160-164
-            DB->DB: SELECT COUNT(*)<br/>database.py:176-178
-            DB->DB: SELECT página<br/>database.py:179-185
-            DB-->API: items e total<br/>database.py:186
-            Note over DB: commit e close ao sair do contexto<br/>database.py:27-33
-            alt risco ausente ou inválido
-                API->>API: probabilidade null, risco Indisponível<br/>students.py:24-29
-            else risco válido
-                API->>API: arredonda probabilidade<br/>students.py:27-29
+        API->>P: fetch_students(...)<br/>students.py:67-76
+        P->>DB: sqlite3.connect(db_path)<br/>database.py:24-25
+        DB-->>P: conn
+        Note over P,DB: Conexão aberta, row_factory configurado (database.py:25)<br/>Sem BEGIN explícito nem transação abrangendo as leituras<br/>A rota não grava dados nem publica eventos<br/>database.py:24-25,160-185
+
+        alt todas as leituras concluem sem exceção
+            P->>DB: PRAGMA table_info(validation_data)<br/>database.py:161-164
+            DB-->>P: colunas da tabela
+            P->>DB: SELECT COUNT(*) com filtros<br/>database.py:165-178
+            DB-->>P: total
+            P->>DB: SELECT da página com filtros e ordenação<br/>database.py:179-185
+            DB-->>P: rows
+            P->>DB: commit(), sem escrita pendente<br/>database.py:28
+            DB-->>P: retorno
+            P->>DB: close() — fim da conexão<br/>database.py:33
+            DB-->>P: retorno
+            P-->>API: list de dicts e total, após sair do with<br/>database.py:186
+
+            loop para cada item retornado
+                API->>API: Montar id, nome e _matricula(item.id)<br/>students.py:20-21,81-85
+                API->>P: course_label(item.Course)<br/>students.py:86
+                P-->>API: nome do curso ou fallback<br/>database.py:112-119
+                alt probabilidade nula ou risco fora de RISCO_LEVELS
+                    API->>API: _risco_item → null e Indisponível<br/>students.py:24-28,87
+                else probabilidade presente e faixa reconhecida
+                    API->>API: _risco_item → round(probabilidade, 4)<br/>students.py:24-29,87
+                end
             end
-            API-->>FE: HTTP 200 e JSON StudentList<br/>schemas.py:79-92
-            FE->>FE: Exibe linhas da tabela
-        else erro em uma leitura
-            Note over DB: rollback e close<br/>database.py:29-33
-            DB-->API: exceção propagada
-            API-->>FE: HTTP 500<br/>main.py:64-67
+            API-->>FE: HTTP 200 com JSON StudentList<br/>students.py:52,77-91, schemas.py:79-92
+            Note over FE: request devolve o corpo JSON<br/>api.ts:23
+        else uma leitura lança exceção e interrompe a sequência
+            Note over P,DB: Falha no PRAGMA, COUNT ou SELECT da página<br/>As leituras posteriores à falha não executam<br/>database.py:160-185
+            DB-->>P: exceção da leitura
+            P->>DB: rollback(), sem escrita a desfazer<br/>database.py:29-30
+            DB-->>P: retorno
+            P->>DB: close() — fim da conexão<br/>database.py:32-33
+            DB-->>P: retorno
+            P-->>API: propaga a exceção<br/>database.py:31-33
+            API-->>FE: HTTP 500, erro interno do servidor<br/>main.py:64-67
+            Note over FE: request rejeita a Promise com Error<br/>api.ts:19-21
         end
     end
